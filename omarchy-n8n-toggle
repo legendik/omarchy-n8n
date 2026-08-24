@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Toggle a workflow active/inactive via the n8n REST API.
+# Usage: omarchy-n8n-toggle <instanceId> <workflowId> <true|false>
+set -euo pipefail
+
+INSTANCE_ID="${1:?Usage: omarchy-n8n-toggle <instanceId> <workflowId> <true|false>}"
+WORKFLOW_ID="${2:?missing workflowId}"
+ACTIVE="${3:?missing active state (true|false)}"
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-n8n"
+INSTANCES_FILE="$CONFIG_DIR/instances.json"
+
+inst_url=$(jq -r --arg id "$INSTANCE_ID" '.[] | select(.id == $id) | .url' "$INSTANCES_FILE") || true
+[[ -n "$inst_url" ]] || { echo "Instance not found: $INSTANCE_ID" >&2; exit 1; }
+inst_url="${inst_url%/}"
+
+# Get API key
+api_key=""
+if command -v secret-tool >/dev/null 2>&1; then
+  api_key=$(secret-tool lookup service omarchy-n8n account "$INSTANCE_ID" 2>/dev/null) || true
+fi
+if [[ -z "$api_key" ]]; then
+  keyfile="$CONFIG_DIR/credentials/$INSTANCE_ID.key"
+  [[ -f "$keyfile" ]] && api_key=$(cat "$keyfile")
+fi
+[[ -n "$api_key" ]] || { echo "No API key for instance: $INSTANCE_ID" >&2; exit 1; }
+
+if [[ "$ACTIVE" == "true" ]]; then
+  curl -sf --max-time 8 -X POST \
+    -H "X-N8N-API-KEY: $api_key" \
+    "$inst_url/api/v1/workflows/$WORKFLOW_ID/activate" >/dev/null
+else
+  curl -sf --max-time 8 -X POST \
+    -H "X-N8N-API-KEY: $api_key" \
+    "$inst_url/api/v1/workflows/$WORKFLOW_ID/deactivate" >/dev/null
+fi
+
+echo "ok"

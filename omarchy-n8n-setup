@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Interactive setup wizard for omarchy-n8n.
+# Adds, lists, or removes n8n instances.
+set -euo pipefail
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-n8n"
+INSTANCES_FILE="$CONFIG_DIR/instances.json"
+CREDS_DIR="$CONFIG_DIR/credentials"
+mkdir -p "$CONFIG_DIR" "$CREDS_DIR"
+chmod 700 "$CREDS_DIR"
+
+[[ -f "$INSTANCES_FILE" ]] || echo '[]' > "$INSTANCES_FILE"
+
+cmd="${1:-add}"
+
+case "$cmd" in
+  add)
+    echo "── n8n instance setup ───────────────────────────────────────"
+    read -rp "Instance name (e.g. prod, local): " inst_name
+    read -rp "n8n URL (e.g. http://localhost:5678): " inst_url
+    inst_url="${inst_url%/}"
+    read -rp "API key (Settings → API → Create API Key in n8n): " inst_key
+    inst_id=$(echo "$inst_name" | tr '[:upper:] ' '[:lower:]-')
+
+    # Test connection
+    echo "Testing connection…"
+    if curl -sf --max-time 6 -H "X-N8N-API-KEY: $inst_key" "$inst_url/api/v1/workflows?limit=1" >/dev/null 2>&1; then
+      echo "✓ Connected."
+    else
+      echo "✗ Could not connect. Check URL and API key. Saving anyway."
+    fi
+
+    # Store key
+    if command -v secret-tool >/dev/null 2>&1; then
+      echo -n "$inst_key" | secret-tool store --label="omarchy-n8n $inst_name" service omarchy-n8n account "$inst_id" 2>/dev/null \
+        && echo "✓ Key stored in keyring." || true
+    fi
+    # Also write file fallback
+    (umask 077; echo -n "$inst_key" > "$CREDS_DIR/$inst_id.key")
+    chmod 600 "$CREDS_DIR/$inst_id.key"
+
+    # Add to instances.json
+    tmp=$(mktemp)
+    jq --arg id "$inst_id" --arg name "$inst_name" --arg url "$inst_url" \
+      '. + [{id: $id, name: $name, url: $url}]' "$INSTANCES_FILE" > "$tmp"
+    mv "$tmp" "$INSTANCES_FILE"
+    echo "✓ Instance '$inst_name' added."
+    echo "Now add the widget: omarchy bar put legendik.n8n --after omarchy.weather"
+    ;;
+
+  list)
+    echo "Configured instances:"
+    jq -r '.[] | "  \(.id)  \(.name)  \(.url)"' "$INSTANCES_FILE"
+    ;;
+
+  remove)
+    id="${2:-}"
+    [[ -z "$id" ]] && { echo "Usage: omarchy-n8n-setup remove <id>"; exit 1; }
+    tmp=$(mktemp)
+    jq --arg id "$id" '[.[] | select(.id != $id)]' "$INSTANCES_FILE" > "$tmp"
+    mv "$tmp" "$INSTANCES_FILE"
+    rm -f "$CREDS_DIR/$id.key"
+    command -v secret-tool >/dev/null 2>&1 && secret-tool clear service omarchy-n8n account "$id" 2>/dev/null || true
+    echo "✓ Removed $id."
+    ;;
+
+  webhook)
+    echo "This command has been removed. Webhooks are no longer supported."
+    echo "Use the n8n editor to trigger workflows manually, or trigger them"
+    echo "from n8n itself (schedule, polling, or other trigger nodes)."
+    exit 1
+    ;;
+
+  *)
+    echo "Usage: omarchy-n8n-setup [add|list|remove <id>|webhook]"
+    exit 1
+    ;;
+esac

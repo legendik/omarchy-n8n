@@ -1,0 +1,249 @@
+#!/usr/bin/env bash
+# Fetch n8n workflow and execution data for all configured instances.
+# Output: one JSON blob to stdout.
+# Config: ~/.config/omarchy-n8n/instances.json
+# Credentials: secret-tool lookup service omarchy-n8n account <instanceId>
+#              fallback: ~/.config/omarchy-n8n/credentials/<instanceId>.key
+set -euo pipefail
+
+MAX_EXECUTIONS=20
+NOTIFY_FAILURE=true
+
+while (($#)); do
+  case "$1" in
+    --max-executions) MAX_EXECUTIONS=$2; shift 2 ;;
+    --notify-failure) NOTIFY_FAILURE=$2; shift 2 ;;
+    -h|--help) echo "Usage: omarchy-n8n-fetch [--max-executions N] [--notify-failure BOOL]"; exit 0 ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-n8n"
+INSTANCES_FILE="$CONFIG_DIR/instances.json"
+STATE_FILE="$CONFIG_DIR/.last-state.json"
+mkdir -p "$CONFIG_DIR"
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+emit_error() {
+  jq -n --arg msg "$1" '{
+    schemaVersion: 1,
+    state: "error",
+    message: $msg,
+    instances: [],
+    totalActive: 0,
+    totalRunning: 0,
+    totalFailed: 0,
+    fetchedAt: (now | todateiso8601)
+  }'
+}
+
+get_api_key() {
+  local id="$1"
+  # Try keyring first
+  if command -v secret-tool >/dev/null 2>&1; then
+    local key
+    key=$(secret-tool lookup service omarchy-n8n account "$id" 2>/dev/null) && [[ -n "$key" ]] && { echo "$key"; return 0; }
+  fi
+  # Fallback: file
+  local keyfile="$CONFIG_DIR/credentials/$id.key"
+  if [[ -f "$keyfile" ]]; then
+    cat "$keyfile"
+    return 0
+  fi
+  return 1
+}
+
+fetch_instance() {
+  local id="$1" name="$2" url="$3"
+  url="${url%/}"  # strip trailing slash
+
+  local api_key
+  api_key=$(get_api_key "$id") || {
+    jq -n --arg id "$id" --arg name "$name" --arg url "$url" '{
+      id: $id, name: $name, url: $url,
+      state: "no-credentials",
+      message: "No API key configured. Run: omarchy-n8n-setup",
+      workflows: [], executions: [],
+      activeCount: 0, inactiveCount: 0, runningCount: 0, failedCount: 0
+    }'
+    return
+  }
+
+  local tmp
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' RETURN
+
+  local base_url="$url/api/v1"
+  local auth_header="X-N8N-API-KEY: $api_key"
+
+  # ── Workflows ──────────────────────────────────────────────────────────────
+  local wf_json
+  wf_json=$(curl -sf --max-time 8 -H "$auth_header" "$base_url/workflows?limit=100" 2>/dev/null) || wf_json='{"data":[]}'
+
+  echo "$wf_json" | jq '[.data[] | {
+    id: (.id | tostring),
+    name: .name,
+    active: .active,
+    updatedAt: (.updatedAt // ""),
+    url: ""
+  }]' > "$tmp/workflows.json" 2>/dev/null || echo '[]' > "$tmp/workflows.json"
+
+  # ── Executions ─────────────────────────────────────────────────────────────
+  local ex_json
+  ex_json=$(curl -sf --max-time 8 -H "$auth_header" "$base_url/executions?limit=$MAX_EXECUTIONS&includeData=false" 2>/dev/null) || ex_json='{"data":[]}'
+
+  # Build a workflowId→name lookup from already-fetched workflows and join
+  # into executions (the executions API doesn't reliably return workflowData.name)
+  echo "$ex_json" > "$tmp/ex_raw.json"
+  jq -s '
+    (.[0] | map({(.id): .name}) | add // {}) as $names |
+    [.[1].data[] | {
+      id: (.id | tostring),
+      workflowId: (.workflowId | tostring),
+      workflowName: ($names[(.workflowId | tostring)] // ""),
+      status: .status,
+      startedAt: (.startedAt // ""),
+      stoppedAt: (.stoppedAt // ""),
+      mode: (.mode // "")
+    }]
+  ' "$tmp/workflows.json" "$tmp/ex_raw.json" > "$tmp/executions.json" 2>/dev/null || echo '[]' > "$tmp/executions.json"
+
+
+
+  local active_count inactive_count running_count failed_count
+  active_count=$(jq '[.[] | select(.active == true)] | length' "$tmp/workflows.json")
+  inactive_count=$(jq '[.[] | select(.active == false)] | length' "$tmp/workflows.json")
+  running_count=$(jq '[.[] | select(.status == "running")] | length' "$tmp/executions.json")
+  failed_count=$(jq '[.[] | select(.status == "error" or .status == "crashed")] | length' "$tmp/executions.json")
+
+  jq -n \
+    --arg id "$id" \
+    --arg name "$name" \
+    --arg url "$url" \
+    --argjson activeCount "$active_count" \
+    --argjson inactiveCount "$inactive_count" \
+    --argjson runningCount "$running_count" \
+    --argjson failedCount "$failed_count" \
+    --slurpfile workflows "$tmp/workflows.json" \
+    --slurpfile executions "$tmp/executions.json" \
+    '{
+      id: $id,
+      name: $name,
+      url: $url,
+      state: "ready",
+      message: "",
+      activeCount: $activeCount,
+      inactiveCount: $inactiveCount,
+      runningCount: $runningCount,
+      failedCount: $failedCount,
+      workflows: $workflows[0],
+      executions: $executions[0]
+    }'
+}
+
+# ── Load instances config ─────────────────────────────────────────────────────
+
+if [[ ! -f "$INSTANCES_FILE" ]]; then
+  emit_error "No instances configured. Run: omarchy-n8n-setup"
+  exit 0
+fi
+
+mapfile -t INSTANCE_IDS < <(jq -r '.[].id' "$INSTANCES_FILE" 2>/dev/null) || true
+
+if [[ ${#INSTANCE_IDS[@]} -eq 0 ]]; then
+  emit_error "No instances in config. Run: omarchy-n8n-setup"
+  exit 0
+fi
+
+# ── Fetch each instance ───────────────────────────────────────────────────────
+
+tmp_main=$(mktemp -d)
+trap 'rm -rf "$tmp_main"' EXIT
+
+echo '[]' > "$tmp_main/instances.json"
+
+for inst_id in "${INSTANCE_IDS[@]}"; do
+  inst_name=$(jq -r --arg id "$inst_id" '.[] | select(.id == $id) | .name' "$INSTANCES_FILE")
+  inst_url=$(jq -r --arg id "$inst_id" '.[] | select(.id == $id) | .url' "$INSTANCES_FILE")
+
+  inst_json=$(fetch_instance "$inst_id" "$inst_name" "$inst_url")
+  jq --argjson inst "$inst_json" '. + [$inst]' "$tmp_main/instances.json" > "$tmp_main/instances_new.json"
+  mv "$tmp_main/instances_new.json" "$tmp_main/instances.json"
+done
+
+# ── Aggregate totals ──────────────────────────────────────────────────────────
+
+TOTAL_ACTIVE=$(jq '[.[].activeCount] | add // 0' "$tmp_main/instances.json")
+TOTAL_RUNNING=$(jq '[.[].runningCount] | add // 0' "$tmp_main/instances.json")
+TOTAL_FAILED=$(jq '[.[].failedCount] | add // 0' "$tmp_main/instances.json")
+
+# ── Failure notifications ─────────────────────────────────────────────────────
+
+if [[ "$NOTIFY_FAILURE" == "true" ]] && command -v notify-send >/dev/null 2>&1; then
+  # Load previously known failed execution keys to avoid re-notifying.
+  # Keys are "<instanceId>:<executionId>" since execution IDs are only
+  # unique within a single n8n instance, not across instances.
+  prev_failed_ids='[]'
+  if [[ -f "$STATE_FILE" ]]; then
+    prev_failed_ids=$(jq '.failedIds // []' "$STATE_FILE" 2>/dev/null || echo '[]')
+  fi
+
+  # Find new failures: join instance URL into each execution, filter out known keys
+  new_failures_json=$(jq -c --argjson prev "$prev_failed_ids" '
+    [
+      .[] as $inst |
+      $inst.executions[] |
+      select(.status == "error" or .status == "crashed") |
+      ($inst.id + ":" + .id) as $key |
+      select($prev | index($key) | not) |
+      {
+        id: .id,
+        workflowName: .workflowName,
+        execUrl: ($inst.url + "/workflow/" + .workflowId + "/executions/" + .id)
+      }
+    ][]
+  ' "$tmp_main/instances.json" 2>/dev/null || true)
+
+  while IFS= read -r entry; do
+    [[ -z "$entry" ]] && continue
+    wf_name=$(jq -r '.workflowName' <<< "$entry")
+    exec_url=$(jq -r '.execUrl'     <<< "$entry")
+
+    # Fire notification in background; --wait blocks until dismissed/clicked.
+    # stdout/stderr are redirected away from this script's own pipes so the
+    # (potentially long-lived, user-dependent) --wait doesn't hold this
+    # process's stdout open and stall the caller reading our JSON output.
+    (
+      action=$(notify-send \
+        --app-name="n8n" \
+        --icon="dialog-error" \
+        --wait \
+        --action="open:Open execution" \
+        "󱓛 Workflow failed" \
+        "$wf_name" 2>/dev/null || true)
+      if [[ "$action" == "open" ]]; then
+        omarchy launch browser "$exec_url" 2>/dev/null || xdg-open "$exec_url" 2>/dev/null || true
+      fi
+    ) > /dev/null 2>&1 &
+  done <<< "$new_failures_json"
+fi
+
+# ── Assemble final JSON ───────────────────────────────────────────────────────
+
+jq -n \
+  --argjson totalActive "$TOTAL_ACTIVE" \
+  --argjson totalRunning "$TOTAL_RUNNING" \
+  --argjson totalFailed "$TOTAL_FAILED" \
+  --slurpfile instances "$tmp_main/instances.json" \
+  '{
+    schemaVersion: 1,
+    state: "ready",
+    message: "",
+    instances: $instances[0],
+    totalActive: $totalActive,
+    totalRunning: $totalRunning,
+    totalFailed: $totalFailed,
+    fetchedAt: (now | todateiso8601),
+    failedIds: [$instances[0][] as $inst | $inst.executions[] | select(.status == "error" or .status == "crashed") | ($inst.id + ":" + .id)]
+  }' | tee "$STATE_FILE"
