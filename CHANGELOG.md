@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/legendik/omarchy-n8n/compare/v0.2.1...v0.2.2) (2026-08-25)
+
+
+### Bug Fixes
+
+* cap toggle response size and render errors as plain text ([5bc93c0](https://github.com/legendik/omarchy-n8n/commit/5bc93c0b4f3dcbd9bd64409cf0e6798ba440d842))
+
 ## [0.2.1](https://github.com/legendik/omarchy-n8n/compare/v0.2.0...v0.2.1) (2026-08-25)
 
 
