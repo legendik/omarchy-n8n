@@ -2,11 +2,13 @@
   "schemaVersion": 1,
   "id": "legendik.n8n",
   "name": "n8n",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "legendik",
   "license": "MIT",
   "description": "n8n workflow monitor: execution status and workflow toggles in the Omarchy bar. Multi-instance support.",
-  "kinds": ["bar-widget"],
+  "kinds": [
+    "bar-widget"
+  ],
   "activation": "on-demand",
   "entryPoints": {
     "barWidget": "Panel.qml"
@@ -15,7 +17,11 @@
     "displayName": "n8n",
     "description": "Monitor n8n workflows and executions from the bar.",
     "category": "Developer Tools",
-    "aliases": ["n8n", "workflow", "automation"],
+    "aliases": [
+      "n8n",
+      "workflow",
+      "automation"
+    ],
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
@@ -24,9 +30,30 @@
       "notifyOnFailure": true
     },
     "schema": [
-      { "key": "refreshIntervalSec", "type": "integer", "label": "Refresh interval (seconds)", "min": 10, "max": 300, "step": 10, "defaultValue": 30 },
-      { "key": "maxExecutions", "type": "integer", "label": "Max executions to show", "min": 5, "max": 50, "step": 5, "defaultValue": 20 },
-      { "key": "notifyOnFailure", "type": "boolean", "label": "Desktop notification on failure", "defaultValue": true }
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 10,
+        "max": 300,
+        "step": 10,
+        "defaultValue": 30
+      },
+      {
+        "key": "maxExecutions",
+        "type": "integer",
+        "label": "Max executions to show",
+        "min": 5,
+        "max": 50,
+        "step": 5,
+        "defaultValue": 20
+      },
+      {
+        "key": "notifyOnFailure",
+        "type": "boolean",
+        "label": "Desktop notification on failure",
+        "defaultValue": true
+      }
     ]
   }
 }
