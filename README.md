@@ -89,6 +89,14 @@ each configured instance, assembles a single JSON blob, and writes it to
 `omarchy-n8n-toggle` calls `POST /api/v1/workflows/:id/activate` or `deactivate`.
 No third party is involved at any point.
 
+## Releasing
+
+Releases are automated by [release-please](https://github.com/googleapis/release-please)
+from [Conventional Commits](https://www.conventionalcommits.org/) on `master`
+(`fix:`, `feat:`, `feat!:`/`BREAKING CHANGE:`, etc.). It opens/updates a
+release PR with the version bump and changelog; merging it tags the release,
+publishes it on GitHub, and updates `version` in `manifest.json`.
+
 ## License
 
 MIT

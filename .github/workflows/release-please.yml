@@ -1,0 +1,23 @@
+name: release-please
+
+# Automates versioning + changelog + GitHub releases from Conventional Commits
+# on master. Opens/updates a "release PR"; merging it cuts the release and
+# bumps manifest.json's version field.
+
+on:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
