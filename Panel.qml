@@ -560,6 +560,19 @@ Panel {
       }
 
       Text {
+        visible: n8n.toggleError !== ""
+        width: parent.width
+        text: n8n.toggleError
+        color: root.urgent
+        wrapMode: Text.WordWrap
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        horizontalAlignment: Text.AlignHCenter
+        topPadding: Style.space(4)
+        bottomPadding: Style.space(4)
+      }
+
+      Text {
         visible: parent.workflows.length === 0
         width: parent.width
         text: "No workflows found."

@@ -25,14 +25,21 @@ if [[ -z "$api_key" ]]; then
 fi
 [[ -n "$api_key" ]] || { echo "No API key for instance: $INSTANCE_ID" >&2; exit 1; }
 
-if [[ "$ACTIVE" == "true" ]]; then
-  curl -sf --max-time 8 -X POST \
-    -H "X-N8N-API-KEY: $api_key" \
-    "$inst_url/api/v1/workflows/$WORKFLOW_ID/activate" >/dev/null
-else
-  curl -sf --max-time 8 -X POST \
-    -H "X-N8N-API-KEY: $api_key" \
-    "$inst_url/api/v1/workflows/$WORKFLOW_ID/deactivate" >/dev/null
-fi
+action="activate"
+[[ "$ACTIVE" == "true" ]] || action="deactivate"
 
-echo "ok"
+response=$(curl -s -w '\n%{http_code}' --max-time 8 -X POST \
+  -H "X-N8N-API-KEY: $api_key" \
+  "$inst_url/api/v1/workflows/$WORKFLOW_ID/$action")
+http_code="${response##*$'\n'}"
+body="${response%$'\n'*}"
+
+if [[ "$http_code" -ge 200 && "$http_code" -lt 300 ]]; then
+  echo '{"ok":true}'
+else
+  err_msg=$(echo "$body" | jq -r '.message // empty' 2>/dev/null)
+  [[ -n "$err_msg" ]] || err_msg="HTTP $http_code"
+  jq -n --arg msg "$err_msg" --arg code "$http_code" \
+    '{ok:false, httpCode: ($code|tonumber), message: $msg}'
+  exit 1
+fi

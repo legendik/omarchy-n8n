@@ -11,6 +11,7 @@ Item {
   property bool loading: false
   property string state: "loading"
   property string message: "Loading…"
+  property string toggleError: ""
 
   // Aggregated across all instances
   property int totalActive: 0
@@ -111,6 +112,14 @@ Item {
     onTriggered: root.refresh()
   }
 
+  Timer {
+    id: toggleErrorClear
+    interval: 6000
+    repeat: false
+    running: false
+    onTriggered: root.toggleError = ""
+  }
+
   Process {
     id: fetchProcess
     running: false
@@ -135,9 +144,21 @@ Item {
     running: false
     command: []
     onExited: function(exitCode) {
+      var stdout = String(toggleOutput.text || "")
+      if (exitCode === 0) {
+        root.toggleError = ""
+      } else {
+        var msg = "Toggle failed."
+        try {
+          var data = JSON.parse(stdout)
+          if (data && data.message) msg = "Toggle failed: " + data.message
+        } catch (e) {}
+        root.toggleError = msg
+        toggleErrorClear.restart()
+      }
       postToggleRefresh.start()
     }
-    stdout: StdioCollector { waitForEnd: true }
+    stdout: StdioCollector { id: toggleOutput; waitForEnd: true }
     stderr: StdioCollector { waitForEnd: true }
   }
 }
