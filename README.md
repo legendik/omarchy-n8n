@@ -30,6 +30,13 @@ omarchy plugin add https://github.com/legendik/omarchy-n8n.git --enable
 omarchy bar put legendik.n8n --after omarchy.weather
 ```
 
+### Uninstall
+
+```sh
+omarchy plugin remove legendik.n8n
+rm -rf ~/.config/omarchy-n8n   # optional: also delete stored instances/credentials
+```
+
 ### First-time setup
 
 Run the setup wizard to add your first instance:
