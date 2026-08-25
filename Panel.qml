@@ -431,6 +431,7 @@ Panel {
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
           horizontalAlignment: Text.AlignHCenter
+          wrapMode: Text.WordWrap
         }
       }
     }
