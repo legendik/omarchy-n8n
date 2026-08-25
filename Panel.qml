@@ -564,6 +564,7 @@ Panel {
         visible: n8n.toggleError !== ""
         width: parent.width
         text: n8n.toggleError
+        textFormat: Text.PlainText
         color: root.urgent
         wrapMode: Text.WordWrap
         font.family: root.fontFamily

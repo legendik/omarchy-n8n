@@ -28,16 +28,19 @@ fi
 action="activate"
 [[ "$ACTIVE" == "true" ]] || action="deactivate"
 
-response=$(curl -s -w '\n%{http_code}' --max-time 8 -X POST \
+tmp_body=$(mktemp)
+trap 'rm -f "$tmp_body"' EXIT
+
+http_code=$(curl -s --max-time 8 -X POST \
   -H "X-N8N-API-KEY: $api_key" \
+  -o "$tmp_body" -w '%{http_code}' \
   "$inst_url/api/v1/workflows/$WORKFLOW_ID/$action")
-http_code="${response##*$'\n'}"
-body="${response%$'\n'*}"
+body=$(head -c 65536 "$tmp_body")
 
 if [[ "$http_code" -ge 200 && "$http_code" -lt 300 ]]; then
   echo '{"ok":true}'
 else
-  err_msg=$(echo "$body" | jq -r '.message // empty' 2>/dev/null)
+  err_msg=$(echo "$body" | jq -r '.message // empty' 2>/dev/null | head -c 500)
   [[ -n "$err_msg" ]] || err_msg="HTTP $http_code"
   jq -n --arg msg "$err_msg" --arg code "$http_code" \
     '{ok:false, httpCode: ($code|tonumber), message: $msg}'
