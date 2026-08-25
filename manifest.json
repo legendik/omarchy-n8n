@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "legendik.n8n",
   "name": "n8n",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": "legendik",
   "license": "MIT",
   "description": "n8n workflow monitor: execution status and workflow toggles in the Omarchy bar. Multi-instance support.",
