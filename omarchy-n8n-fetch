@@ -79,7 +79,7 @@ fetch_instance() {
 
   # ── Workflows ──────────────────────────────────────────────────────────────
   local wf_json
-  wf_json=$(curl -sf --max-time 8 -H "$auth_header" "$base_url/workflows?limit=100" 2>/dev/null) || wf_json='{"data":[]}'
+  wf_json=$(curl -sf --max-time 8 --max-filesize 10485760 -H "$auth_header" "$base_url/workflows?limit=100" 2>/dev/null) || wf_json='{"data":[]}'
 
   echo "$wf_json" | jq '[.data[] | {
     id: (.id | tostring),
@@ -91,7 +91,7 @@ fetch_instance() {
 
   # ── Executions ─────────────────────────────────────────────────────────────
   local ex_json
-  ex_json=$(curl -sf --max-time 8 -H "$auth_header" "$base_url/executions?limit=$MAX_EXECUTIONS&includeData=false" 2>/dev/null) || ex_json='{"data":[]}'
+  ex_json=$(curl -sf --max-time 8 --max-filesize 10485760 -H "$auth_header" "$base_url/executions?limit=$MAX_EXECUTIONS&includeData=false" 2>/dev/null) || ex_json='{"data":[]}'
 
   # Build a workflowId→name lookup from already-fetched workflows and join
   # into executions (the executions API doesn't reliably return workflowData.name)

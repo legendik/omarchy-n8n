@@ -31,7 +31,7 @@ action="activate"
 tmp_body=$(mktemp)
 trap 'rm -f "$tmp_body"' EXIT
 
-http_code=$(curl -s --max-time 8 -X POST \
+http_code=$(curl -s --max-time 8 --max-filesize 65536 -X POST \
   -H "X-N8N-API-KEY: $api_key" \
   -o "$tmp_body" -w '%{http_code}' \
   "$inst_url/api/v1/workflows/$WORKFLOW_ID/$action")
