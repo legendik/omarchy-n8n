@@ -75,11 +75,17 @@ fetch_instance() {
   trap 'rm -rf "$tmp"' RETURN
 
   local base_url="$url/api/v1"
-  local auth_header="X-N8N-API-KEY: $api_key"
+
+  # Pass the API key to curl via a -K config file read from stdin rather than
+  # -H/argv, so it doesn't show up in `ps`/`/proc/<pid>/cmdline` output.
+  local escaped_key auth_config
+  escaped_key="${api_key//\\/\\\\}"
+  escaped_key="${escaped_key//\"/\\\"}"
+  auth_config=$(printf 'header = "X-N8N-API-KEY: %s"\n' "$escaped_key")
 
   # ── Workflows ──────────────────────────────────────────────────────────────
   local wf_json
-  wf_json=$(curl -sf --max-time 8 --max-filesize 10485760 -H "$auth_header" "$base_url/workflows?limit=100" 2>/dev/null) || wf_json='{"data":[]}'
+  wf_json=$(printf '%s' "$auth_config" | curl -sf --max-time 8 --max-filesize 10485760 -K - "$base_url/workflows?limit=100" 2>/dev/null) || wf_json='{"data":[]}'
 
   echo "$wf_json" | jq '[.data[] | {
     id: (.id | tostring),
@@ -91,7 +97,7 @@ fetch_instance() {
 
   # ── Executions ─────────────────────────────────────────────────────────────
   local ex_json
-  ex_json=$(curl -sf --max-time 8 --max-filesize 10485760 -H "$auth_header" "$base_url/executions?limit=$MAX_EXECUTIONS&includeData=false" 2>/dev/null) || ex_json='{"data":[]}'
+  ex_json=$(printf '%s' "$auth_config" | curl -sf --max-time 8 --max-filesize 10485760 -K - "$base_url/executions?limit=$MAX_EXECUTIONS&includeData=false" 2>/dev/null) || ex_json='{"data":[]}'
 
   # Build a workflowId→name lookup from already-fetched workflows and join
   # into executions (the executions API doesn't reliably return workflowData.name)

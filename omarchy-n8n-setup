@@ -22,22 +22,36 @@ case "$cmd" in
     read -rp "API key (Settings → API → Create API Key in n8n): " inst_key
     inst_id=$(echo "$inst_name" | tr '[:upper:] ' '[:lower:]-')
 
+    # Pass the API key to curl via a -K config file read from stdin rather
+    # than -H/argv, so it doesn't show up in `ps`/`/proc/<pid>/cmdline` output.
+    escaped_key="${inst_key//\\/\\\\}"
+    escaped_key="${escaped_key//\"/\\\"}"
+
     # Test connection
     echo "Testing connection…"
-    if curl -sf --max-time 6 -H "X-N8N-API-KEY: $inst_key" "$inst_url/api/v1/workflows?limit=1" >/dev/null 2>&1; then
+    if printf 'header = "X-N8N-API-KEY: %s"\n' "$escaped_key" \
+      | curl -sf --max-time 6 -K - "$inst_url/api/v1/workflows?limit=1" >/dev/null 2>&1; then
       echo "✓ Connected."
     else
       echo "✗ Could not connect. Check URL and API key. Saving anyway."
     fi
 
-    # Store key
+    # Store key: keyring first, plaintext file fallback only when the
+    # keyring is unavailable or the store operation fails.
+    key_stored_in_keyring=false
     if command -v secret-tool >/dev/null 2>&1; then
-      echo -n "$inst_key" | secret-tool store --label="omarchy-n8n $inst_name" service omarchy-n8n account "$inst_id" 2>/dev/null \
-        && echo "✓ Key stored in keyring." || true
+      if echo -n "$inst_key" | secret-tool store --label="omarchy-n8n $inst_name" service omarchy-n8n account "$inst_id" 2>/dev/null; then
+        echo "✓ Key stored in keyring."
+        key_stored_in_keyring=true
+      fi
     fi
-    # Also write file fallback
-    (umask 077; echo -n "$inst_key" > "$CREDS_DIR/$inst_id.key")
-    chmod 600 "$CREDS_DIR/$inst_id.key"
+    if [[ "$key_stored_in_keyring" != true ]]; then
+      (umask 077; echo -n "$inst_key" > "$CREDS_DIR/$inst_id.key")
+      chmod 600 "$CREDS_DIR/$inst_id.key"
+    else
+      # Remove any stale plaintext copy left over from a prior run/version.
+      rm -f "$CREDS_DIR/$inst_id.key"
+    fi
 
     # Add to instances.json
     tmp=$(mktemp)
