@@ -43,6 +43,10 @@ You'll be prompted for:
 2. n8n URL (e.g. `http://localhost:5678` or `https://n8n.yourcompany.com`)
 3. API key (n8n → Settings → n8n API → Create an API key)
 
+If your n8n instance supports scoped API keys, the plugin only needs:
+`workflow:list`, `workflow:activate`, `workflow:deactivate`, `execution:list`.
+No credential, user, or write-access-to-workflow-content scopes are required.
+
 ### Multiple instances
 
 ```sh
