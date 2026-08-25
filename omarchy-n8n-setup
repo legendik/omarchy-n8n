@@ -64,15 +64,8 @@ case "$cmd" in
     echo "✓ Removed $id."
     ;;
 
-  webhook)
-    echo "This command has been removed. Webhooks are no longer supported."
-    echo "Use the n8n editor to trigger workflows manually, or trigger them"
-    echo "from n8n itself (schedule, polling, or other trigger nodes)."
-    exit 1
-    ;;
-
   *)
-    echo "Usage: omarchy-n8n-setup [add|list|remove <id>|webhook]"
+    echo "Usage: omarchy-n8n-setup [add|list|remove <id>]"
     exit 1
     ;;
 esac
