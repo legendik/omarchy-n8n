@@ -19,7 +19,8 @@ case "$cmd" in
     read -rp "Instance name (e.g. prod, local): " inst_name
     read -rp "n8n URL (e.g. http://localhost:5678): " inst_url
     inst_url="${inst_url%/}"
-    read -rp "API key (Settings → API → Create API Key in n8n): " inst_key
+    read -rp "API key (Settings → API → Create API Key in n8n): " -s inst_key
+    echo
     inst_id=$(echo "$inst_name" | tr '[:upper:] ' '[:lower:]-')
 
     # Pass the API key to curl via a -K config file read from stdin rather

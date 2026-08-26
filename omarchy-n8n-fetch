@@ -84,10 +84,13 @@ fetch_instance() {
   auth_config=$(printf 'header = "X-N8N-API-KEY: %s"\n' "$escaped_key")
 
   # ── Workflows ──────────────────────────────────────────────────────────────
+  # Hard-cap the number of items we accept regardless of what the server
+  # returns (defense in depth: a compromised/malicious endpoint could ignore
+  # our ?limit= query param and return an arbitrarily large array).
   local wf_json
   wf_json=$(printf '%s' "$auth_config" | curl -sf --max-time 8 --max-filesize 10485760 -K - "$base_url/workflows?limit=100" 2>/dev/null) || wf_json='{"data":[]}'
 
-  echo "$wf_json" | jq '[.data[] | {
+  echo "$wf_json" | jq '[limit(200; .data[]) | {
     id: (.id | tostring),
     name: .name,
     active: .active,
@@ -100,11 +103,13 @@ fetch_instance() {
   ex_json=$(printf '%s' "$auth_config" | curl -sf --max-time 8 --max-filesize 10485760 -K - "$base_url/executions?limit=$MAX_EXECUTIONS&includeData=false" 2>/dev/null) || ex_json='{"data":[]}'
 
   # Build a workflowId→name lookup from already-fetched workflows and join
-  # into executions (the executions API doesn't reliably return workflowData.name)
+  # into executions (the executions API doesn't reliably return workflowData.name).
+  # limit() caps how many executions we ever materialize, independent of what
+  # the server claims $MAX_EXECUTIONS should return.
   echo "$ex_json" > "$tmp/ex_raw.json"
   jq -s '
     (.[0] | map({(.id): .name}) | add // {}) as $names |
-    [.[1].data[] | {
+    [limit(200; .[1].data[]) | {
       id: (.id | tostring),
       workflowId: (.workflowId | tostring),
       workflowName: ($names[(.workflowId | tostring)] // ""),
@@ -195,19 +200,23 @@ if [[ "$NOTIFY_FAILURE" == "true" ]] && command -v notify-send >/dev/null 2>&1; 
     prev_failed_ids=$(jq '.failedIds // []' "$STATE_FILE" 2>/dev/null || echo '[]')
   fi
 
-  # Find new failures: join instance URL into each execution, filter out known keys
+  # Find new failures: join instance URL into each execution, filter out known keys.
+  # limit() bounds how many failures we'll ever act on in a single run so a
+  # compromised endpoint can't make us spawn unbounded background processes.
   new_failures_json=$(jq -c --argjson prev "$prev_failed_ids" '
     [
-      .[] as $inst |
-      $inst.executions[] |
-      select(.status == "error" or .status == "crashed") |
-      ($inst.id + ":" + .id) as $key |
-      select($prev | index($key) | not) |
-      {
-        id: .id,
-        workflowName: .workflowName,
-        execUrl: ($inst.url + "/workflow/" + .workflowId + "/executions/" + .id)
-      }
+      limit(20;
+        .[] as $inst |
+        $inst.executions[] |
+        select(.status == "error" or .status == "crashed") |
+        ($inst.id + ":" + .id) as $key |
+        select($prev | index($key) | not) |
+        {
+          id: .id,
+          workflowName: .workflowName,
+          execUrl: ($inst.url + "/workflow/" + .workflowId + "/executions/" + .id)
+        }
+      )
     ][]
   ' "$tmp_main/instances.json" 2>/dev/null || true)
 
