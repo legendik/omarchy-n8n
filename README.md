@@ -20,7 +20,7 @@ Multi-instance support: track prod and local side by side.
 
 - Omarchy Quattro shell
 - `bash`, `curl`, `jq` (all stock)
-- `secret-tool` (libsecret) for keyring storage — falls back to `~/.config/omarchy-n8n/credentials/` with `0600` permissions
+- `secret-tool` (libsecret) with a running keyring service (gnome-keyring, kwallet, ...) — required for storing API keys
 - An n8n instance with API enabled (n8n ≥ 0.188 for REST API; Settings → API → Enable)
 
 ## Install
@@ -34,7 +34,7 @@ omarchy bar put legendik.n8n --after omarchy.weather
 
 ```sh
 omarchy plugin remove legendik.n8n
-rm -rf ~/.config/omarchy-n8n   # optional: also delete stored instances/credentials
+rm -rf ~/.config/omarchy-n8n   # optional: also delete stored instances (keyring entries need: omarchy-n8n-setup remove <id> beforehand, or secret-tool clear service omarchy-n8n)
 ```
 
 ### First-time setup

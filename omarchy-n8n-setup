@@ -5,9 +5,7 @@ set -euo pipefail
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-n8n"
 INSTANCES_FILE="$CONFIG_DIR/instances.json"
-CREDS_DIR="$CONFIG_DIR/credentials"
-mkdir -p "$CONFIG_DIR" "$CREDS_DIR"
-chmod 700 "$CREDS_DIR"
+mkdir -p "$CONFIG_DIR"
 
 [[ -f "$INSTANCES_FILE" ]] || echo '[]' > "$INSTANCES_FILE"
 
@@ -16,12 +14,39 @@ cmd="${1:-add}"
 case "$cmd" in
   add)
     echo "── n8n instance setup ───────────────────────────────────────"
+
+    if ! command -v secret-tool >/dev/null 2>&1; then
+      echo "✗ secret-tool (libsecret) is required to store API keys securely." >&2
+      echo "  Install it (e.g. 'sudo pacman -S libsecret') and ensure a" >&2
+      echo "  keyring service (gnome-keyring, kwallet, ...) is running, then retry." >&2
+      exit 1
+    fi
+
     read -rp "Instance name (e.g. prod, local): " inst_name
     read -rp "n8n URL (e.g. http://localhost:5678): " inst_url
     inst_url="${inst_url%/}"
     read -rp "API key (Settings → API → Create API Key in n8n): " -s inst_key
     echo
-    inst_id=$(echo "$inst_name" | tr '[:upper:] ' '[:lower:]-')
+    # Slugify to a strict filename/secret-tool-safe id: lowercase, then
+    # replace every character outside a-z0-9 with '-', collapsing repeats
+    # and trimming leading/trailing dashes. This id is later re-validated
+    # with the same strict pattern by -fetch and -toggle, so anything that
+    # doesn't match here would silently break the instance after setup.
+    inst_id=$(echo "$inst_name" \
+      | tr '[:upper:]' '[:lower:]' \
+      | tr -c 'a-z0-9' '-' \
+      | sed -e 's/-\{2,\}/-/g' -e 's/^-//' -e 's/-$//')
+
+    if [[ -z "$inst_id" ]]; then
+      echo "✗ Instance name must contain at least one letter or digit." >&2
+      exit 1
+    fi
+
+    if jq -e --arg id "$inst_id" '.[] | select(.id == $id)' "$INSTANCES_FILE" >/dev/null; then
+      echo "✗ An instance with id '$inst_id' already exists (name conflict)." >&2
+      echo "  Choose a different name, or remove the existing one first: omarchy-n8n-setup remove $inst_id" >&2
+      exit 1
+    fi
 
     # Pass the API key to curl via a -K config file read from stdin rather
     # than -H/argv, so it doesn't show up in `ps`/`/proc/<pid>/cmdline` output.
@@ -37,22 +62,13 @@ case "$cmd" in
       echo "✗ Could not connect. Check URL and API key. Saving anyway."
     fi
 
-    # Store key: keyring first, plaintext file fallback only when the
-    # keyring is unavailable or the store operation fails.
-    key_stored_in_keyring=false
-    if command -v secret-tool >/dev/null 2>&1; then
-      if echo -n "$inst_key" | secret-tool store --label="omarchy-n8n $inst_name" service omarchy-n8n account "$inst_id" 2>/dev/null; then
-        echo "✓ Key stored in keyring."
-        key_stored_in_keyring=true
-      fi
+    # Store key in the system keyring. Abort if it fails rather than
+    # leaving the instance configured with no usable credential.
+    if ! echo -n "$inst_key" | secret-tool store --label="omarchy-n8n $inst_name" service omarchy-n8n account "$inst_id" 2>/dev/null; then
+      echo "✗ Failed to store the API key in the keyring. Aborting." >&2
+      exit 1
     fi
-    if [[ "$key_stored_in_keyring" != true ]]; then
-      (umask 077; echo -n "$inst_key" > "$CREDS_DIR/$inst_id.key")
-      chmod 600 "$CREDS_DIR/$inst_id.key"
-    else
-      # Remove any stale plaintext copy left over from a prior run/version.
-      rm -f "$CREDS_DIR/$inst_id.key"
-    fi
+    echo "✓ Key stored in keyring."
 
     # Add to instances.json
     tmp=$(mktemp)
@@ -74,7 +90,6 @@ case "$cmd" in
     tmp=$(mktemp)
     jq --arg id "$id" '[.[] | select(.id != $id)]' "$INSTANCES_FILE" > "$tmp"
     mv "$tmp" "$INSTANCES_FILE"
-    rm -f "$CREDS_DIR/$id.key"
     command -v secret-tool >/dev/null 2>&1 && secret-tool clear service omarchy-n8n account "$id" 2>/dev/null || true
     echo "✓ Removed $id."
     ;;

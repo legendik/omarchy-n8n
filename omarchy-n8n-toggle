@@ -7,6 +7,13 @@ INSTANCE_ID="${1:?Usage: omarchy-n8n-toggle <instanceId> <workflowId> <true|fals
 WORKFLOW_ID="${2:?missing workflowId}"
 ACTIVE="${3:?missing active state (true|false)}"
 
+[[ "$INSTANCE_ID" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "Invalid instance id: $INSTANCE_ID" >&2; exit 1; }
+# workflowId flows in from the n8n API response (via -fetch and the UI), so
+# it must be validated before being spliced into the request URL below —
+# otherwise a compromised endpoint could smuggle extra path segments to
+# redirect the authenticated request to a different endpoint/verb.
+[[ "$WORKFLOW_ID" =~ ^[A-Za-z0-9_-]+$ ]] || { echo "Invalid workflow id: $WORKFLOW_ID" >&2; exit 1; }
+
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-n8n"
 INSTANCES_FILE="$CONFIG_DIR/instances.json"
 
@@ -14,14 +21,10 @@ inst_url=$(jq -r --arg id "$INSTANCE_ID" '.[] | select(.id == $id) | .url' "$INS
 [[ -n "$inst_url" ]] || { echo "Instance not found: $INSTANCE_ID" >&2; exit 1; }
 inst_url="${inst_url%/}"
 
-# Get API key
+# Get API key from the system keyring.
 api_key=""
 if command -v secret-tool >/dev/null 2>&1; then
   api_key=$(secret-tool lookup service omarchy-n8n account "$INSTANCE_ID" 2>/dev/null) || true
-fi
-if [[ -z "$api_key" ]]; then
-  keyfile="$CONFIG_DIR/credentials/$INSTANCE_ID.key"
-  [[ -f "$keyfile" ]] && api_key=$(cat "$keyfile")
 fi
 [[ -n "$api_key" ]] || { echo "No API key for instance: $INSTANCE_ID" >&2; exit 1; }
 
