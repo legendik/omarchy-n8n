@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.3](https://github.com/legendik/omarchy-n8n/compare/v0.2.2...v0.2.3) (2026-08-26)
+
+
+### Bug Fixes
+
+* bound curl response sizes to prevent disk/memory exhaustion ([a3e8aed](https://github.com/legendik/omarchy-n8n/commit/a3e8aedb57012281c8b9975be797a7bbe1bdaa5e))
+* **security:** cap array sizes, bound notification spawning, hide API key input ([7574cf8](https://github.com/legendik/omarchy-n8n/commit/7574cf873a8207bc1c6ac42d3ff2ee5de0e0ee7b))
+* **security:** stop leaking n8n API key via curl argv, honor keyring-first fallback ([b1e5150](https://github.com/legendik/omarchy-n8n/commit/b1e5150b4b462433ae2c6b41376264c7b1ac122f))
+
 ## [0.2.2](https://github.com/legendik/omarchy-n8n/compare/v0.2.1...v0.2.2) (2026-08-25)
 
 
