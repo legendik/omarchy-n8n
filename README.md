@@ -18,9 +18,9 @@ Multi-instance support: track prod and local side by side.
 
 ## Requirements
 
-- Omarchy Quattro shell
-- `bash`, `curl`, `jq` (all stock)
+- Omarchy Quattro shell (Quickshell)
 - `secret-tool` (libsecret) with a running keyring service (gnome-keyring, kwallet, ...) — required for storing API keys
+- `bash`, `curl`, `jq` — only needed for the `omarchy-n8n-setup` CLI wizard, not for the running widget
 - An n8n instance with API enabled (n8n ≥ 0.188 for REST API; Settings → API → Enable)
 
 ## Install
@@ -90,11 +90,19 @@ In the Omarchy shell settings panel:
 
 ## How it works
 
-`omarchy-n8n-fetch` polls `GET /api/v1/workflows` and `GET /api/v1/executions` from
-each configured instance, assembles a single JSON blob, and writes it to
-`~/.config/omarchy-n8n/.last-state.json` (used for failure diffing).
-`omarchy-n8n-toggle` calls `POST /api/v1/workflows/:id/activate` or `deactivate`.
-No third party is involved at any point.
+The panel's `Service.qml` polls each configured instance directly via
+`XMLHttpRequest` — `GET /api/v1/workflows` and `GET /api/v1/executions` —
+in-process, in QML/JS. No `curl`/`jq` subprocess is spawned for the recurring
+poll or the workflow toggle action. Results are aggregated in memory and the
+failed-execution IDs are written to `~/.config/omarchy-n8n/.last-state.json`
+(via Quickshell's `FileView`, which writes atomically) for failure diffing
+between refreshes. Toggling a workflow issues a direct
+`POST /api/v1/workflows/:id/activate` or `deactivate` request the same way.
+
+API keys are looked up from the system keyring via `secret-tool` for each
+request; they are never written to disk. `omarchy-n8n-setup` remains a small
+bash/curl/jq CLI wizard for interactively adding, listing, and removing
+instances — it's the only place those tools are still used.
 
 ## Releasing
 
