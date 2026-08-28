@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0](https://github.com/legendik/omarchy-n8n/compare/v0.2.3...v0.3.0) (2026-08-28)
+
+
+### Features
+
+* rewrite ([69499cc](https://github.com/legendik/omarchy-n8n/commit/69499ccfc7d94b7117feb910d3106bb9f12956d9))
+
+
+### Bug Fixes
+
+* add cap ([0f1b02b](https://github.com/legendik/omarchy-n8n/commit/0f1b02ba9f70250a85e24111df818c0eb0fb98df))
+* read config/state files via bounded no-follow dd, not FileView ([34af28f](https://github.com/legendik/omarchy-n8n/commit/34af28f240fd6697c22a2560f5ca763a2813d5fa))
+
 ## [0.2.3](https://github.com/legendik/omarchy-n8n/compare/v0.2.2...v0.2.3) (2026-08-26)
 
 
