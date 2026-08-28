@@ -57,6 +57,9 @@ Item {
   readonly property int _requestTimeoutMs: 8000
   readonly property int _maxNotificationsPerRun: 20
   readonly property int _maxItemsPerInstance: 200
+  readonly property int _maxConfigBytes: 262144                // instances.json / .last-state.json read cap (256 KiB)
+  readonly property int _maxInstances: 20                      // parallel secret-tool + HTTP jobs cap
+  readonly property int _maxApiKeyBytes: 4096                  // secret-tool stdout cap
 
   function setting(name, fallback) {
     var value = settings ? settings[name] : undefined
@@ -122,6 +125,9 @@ Item {
       .then(function(r) {
         if (r.exitCode !== 0) return null
         var text = r.output.replace(/\n+$/, "")
+        // Bound the key before retaining it: a tampered keyring or a compromised
+        // secret-tool build should not be able to buffer an arbitrarily large value.
+        if (_byteLength(text) > root._maxApiKeyBytes) return null
         return text.length > 0 ? text : null
       })
   }
@@ -244,6 +250,16 @@ Item {
 
   function _onInstancesLoaded() {
     var text = instancesFile.text()
+    // Byte-cap before JSON.parse() to prevent an oversized or FIFO-replaced
+    // file from exhausting memory or blocking the process indefinitely.
+    if (_byteLength(text) > root._maxConfigBytes) {
+      root._rawInstances = []
+      root.instances = []
+      root.state = "error"
+      root.message = "Instances config is too large. Please check: " + root._instancesPath
+      root.fetchedAt = new Date().toISOString()
+      return
+    }
     var parsed
     try {
       parsed = JSON.parse(text && text.trim() !== "" ? text : "[]")
@@ -255,7 +271,7 @@ Item {
       root.fetchedAt = new Date().toISOString()
       return
     }
-    root._rawInstances = Array.isArray(parsed) ? parsed : []
+    root._rawInstances = Array.isArray(parsed) ? parsed.slice(0, root._maxInstances) : []
     if (root._rawInstances.length === 0) {
       root.instances = []
       root.state = "error"
@@ -304,7 +320,9 @@ Item {
   function _previousFailedIds() {
     if (!stateFile.loaded) return []
     try {
-      var data = JSON.parse(stateFile.text())
+      var text = stateFile.text()
+      if (_byteLength(text) > root._maxConfigBytes) return []
+      var data = JSON.parse(text)
       return Array.isArray(data.failedIds) ? data.failedIds : []
     } catch (e) {
       return []
