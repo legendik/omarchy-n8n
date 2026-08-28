@@ -20,6 +20,7 @@ Multi-instance support: track prod and local side by side.
 
 - Omarchy Quattro shell (Quickshell)
 - `secret-tool` (libsecret) with a running keyring service (gnome-keyring, kwallet, ...) — required for storing API keys
+- `dd` (coreutils) — used by the widget itself for bounded, symlink-safe reads of its own config/state files
 - `bash`, `curl`, `jq` — only needed for the `omarchy-n8n-setup` CLI wizard, not for the running widget
 - An n8n instance with API enabled (n8n ≥ 0.188 for REST API; Settings → API → Enable)
 
@@ -95,9 +96,16 @@ The panel's `Service.qml` polls each configured instance directly via
 in-process, in QML/JS. No `curl`/`jq` subprocess is spawned for the recurring
 poll or the workflow toggle action. Results are aggregated in memory and the
 failed-execution IDs are written to `~/.config/omarchy-n8n/.last-state.json`
-(via Quickshell's `FileView`, which writes atomically) for failure diffing
-between refreshes. Toggling a workflow issues a direct
+via Quickshell's `FileView` (atomic write: private temp file + rename) for
+failure diffing between refreshes. Toggling a workflow issues a direct
 `POST /api/v1/workflows/:id/activate` or `deactivate` request the same way.
+
+`instances.json` and `.last-state.json` live at predictable, user-writable
+paths, so reading their *contents* never goes through `FileView` (Quickshell's
+reader follows symlinks and can block on a FIFO). Instead the widget spawns
+`dd iflag=nofollow,nonblock` with a byte cap to read them, refusing anything
+that isn't a plain, bounded, readable regular file — `FileView` is used only
+to watch for changes on disk.
 
 API keys are looked up from the system keyring via `secret-tool` for each
 request; they are never written to disk. `omarchy-n8n-setup` remains a small

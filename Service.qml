@@ -5,16 +5,25 @@ import Quickshell.Io
 // n8n data service. Polls configured instances over the n8n REST API and
 // exposes aggregated workflow + execution state as stable QML properties.
 //
-// Everything happens in-process here via QML's XMLHttpRequest and FileView:
-// no curl/jq/bash helper scripts are spawned for the recurring poll or the
-// workflow toggle action, so there's no argv/ps exposure to guard against,
-// no JSON-processing subprocess pipeline, and file reads/writes go through
-// FileView's built-in atomic-write and async-load handling instead of
-// hand-rolled dd/mktemp/mv tricks.
+// Fetching/toggling happens in-process via QML's XMLHttpRequest, so there's
+// no curl/argv exposure and no JSON-processing subprocess pipeline for the
+// network side. Writes to instances.json/.last-state.json go through
+// FileView's built-in atomic-write handling (temp file + rename).
 //
-// The only external processes this file ever spawns are `secret-tool`
-// (Qt/QML has no libsecret bindings) and, on failure, `notify-send` /
-// `omarchy launch browser` / `xdg-open` for desktop alerts.
+// Reads of those same two files are NOT done via FileView.text()/.data():
+// Quickshell's FileView reader opens files with a plain blocking QFile, so
+// it follows symlinks and can hang forever reading from a FIFO. Since both
+// paths are predictable and user-writable, a pre-planted symlink or special
+// file at either path would defeat any read done that way. Instead FileView
+// here is watcher-only (used solely for its onFileChanged/watchChanges
+// signal) and actual content is read via `dd iflag=nofollow,nonblock`
+// (spawned through runProcess()), mirroring the bounded/no-follow read the
+// original bash implementation used.
+//
+// The other external processes this file spawns are `secret-tool`
+// (Qt/QML has no libsecret bindings), `stat`/`dd` for the bounded reads
+// above, and, on failure, `notify-send` / `omarchy launch browser` /
+// `xdg-open` for desktop alerts.
 Item {
   id: root
 
@@ -117,6 +126,31 @@ Item {
         if (!p.running) finish(null)
       })
       p.running = true
+    })
+  }
+
+  // Reads a regular file with a byte cap, no symlink-following, and no
+  // blocking on a FIFO/special file — the same guarantee the original bash
+  // helper provided, reimplemented here because FileView.text()/.data()
+  // offer none of this (see the header comment above).
+  //
+  // `dd iflag=nofollow,nonblock` fails immediately (ELOOP) if the final path
+  // component is a symlink, and fails/returns short (EAGAIN) rather than
+  // block if it's a FIFO with no writer. `bs=<cap+1> count=1` also bounds
+  // the read itself to one cap-sized-plus-one block, so an oversized
+  // regular file can't be read in full before we notice it's too big.
+  //
+  // Resolves to null if the file is missing, unreadable, a symlink, a
+  // special file, or larger than maxBytes; otherwise resolves to its text.
+  function readBoundedFile(path, maxBytes) {
+    var ddArgs = [
+      "dd", "if=" + path, "iflag=nofollow,nonblock",
+      "bs=" + (maxBytes + 1), "count=1", "status=none"
+    ]
+    return root.runProcess(ddArgs).then(function(r) {
+      if (r.exitCode !== 0) return null
+      if (_byteLength(r.output) > maxBytes) return null
+      return r.output
     })
   }
 
@@ -239,94 +273,83 @@ Item {
 
   // ── Instances config ──────────────────────────────────────────────────────
 
+  // preload: false keeps this watcher-only — it never touches
+  // instancesFile.text()/.data(), so the unsafe FileView read path is never
+  // exercised for this predictable, user-writable path. It only exists to
+  // detect changes via QFileSystemWatcher; actual content always comes from
+  // readBoundedFile() below.
   FileView {
     id: instancesFile
     path: root._instancesPath
+    preload: false
     watchChanges: true
-    onFileChanged: reload()
-    onLoaded: root._onInstancesLoaded()
-    onLoadFailed: function(error) { root._onInstancesLoadFailed(error) }
+    onFileChanged: root._loadInstances()
   }
 
-  function _onInstancesLoaded() {
-    var text = instancesFile.text()
-    // Byte-cap before JSON.parse() to prevent an oversized or FIFO-replaced
-    // file from exhausting memory or blocking the process indefinitely.
-    if (_byteLength(text) > root._maxConfigBytes) {
-      root._rawInstances = []
-      root.instances = []
-      root.state = "error"
-      root.message = "Instances config is too large. Please check: " + root._instancesPath
-      root.fetchedAt = new Date().toISOString()
-      return
-    }
-    var parsed
-    try {
-      parsed = JSON.parse(text && text.trim() !== "" ? text : "[]")
-    } catch (e) {
-      root._rawInstances = []
-      root.instances = []
-      root.state = "error"
-      root.message = "Instances config is not valid JSON. Run: omarchy-n8n-setup"
-      root.fetchedAt = new Date().toISOString()
-      return
-    }
-    root._rawInstances = Array.isArray(parsed) ? parsed.slice(0, root._maxInstances) : []
-    if (root._rawInstances.length === 0) {
-      root.instances = []
-      root.state = "error"
-      root.message = "No instances in config. Run: omarchy-n8n-setup"
-      root.fetchedAt = new Date().toISOString()
-      return
-    }
-    root.refresh()
+  function _loadInstances() {
+    root.readBoundedFile(root._instancesPath, root._maxConfigBytes).then(function(text) {
+      if (text === null) {
+        root._rawInstances = []
+        root.instances = []
+        root.totalActive = 0
+        root.totalRunning = 0
+        root.totalFailed = 0
+        root.state = "error"
+        root.message = "Could not read instances config (missing, unreadable, a symlink, "
+          + "too large, or not a regular file). Run: omarchy-n8n-setup"
+        root.fetchedAt = new Date().toISOString()
+        return
+      }
+      var parsed
+      try {
+        parsed = JSON.parse(text && text.trim() !== "" ? text : "[]")
+      } catch (e) {
+        root._rawInstances = []
+        root.instances = []
+        root.state = "error"
+        root.message = "Instances config is not valid JSON. Run: omarchy-n8n-setup"
+        root.fetchedAt = new Date().toISOString()
+        return
+      }
+      root._rawInstances = Array.isArray(parsed) ? parsed.slice(0, root._maxInstances) : []
+      if (root._rawInstances.length === 0) {
+        root.instances = []
+        root.state = "error"
+        root.message = "No instances in config. Run: omarchy-n8n-setup"
+        root.fetchedAt = new Date().toISOString()
+        return
+      }
+      root.refresh()
+    })
   }
 
-  function _onInstancesLoadFailed(error) {
-    root._rawInstances = []
-    root.instances = []
-    root.totalActive = 0
-    root.totalRunning = 0
-    root.totalFailed = 0
-    root.state = "error"
-    root.message = error === FileViewError.FileNotFound
-      ? "No instances configured. Run: omarchy-n8n-setup"
-      : "Could not read instances config. Run: omarchy-n8n-setup"
-    root.fetchedAt = new Date().toISOString()
-  }
+  // ── Previous-failure state (for notification dedup) ────────────────────────
 
-  // ── Previous-failure state (for notification dedup) ───────────────────────
-
+  // Same watcher-only treatment as instancesFile above: writes still go
+  // through FileView.setText() for its atomic-write guarantee (private temp
+  // file + rename), but reads never go through FileView.
   FileView {
     id: stateFile
     path: root._statePath
-    // atomicWrites defaults to true: setText() writes to a private temp
-    // file and renames it over the target, so a reader never observes a
-    // half-written file and a pre-existing symlink at this path gets
-    // replaced rather than written through.
-    onLoaded: root._stateReady = true
-    onLoadFailed: function(error) { root._stateReady = true }
   }
 
-  // Tracks whether the initial (async) load attempt of stateFile has
-  // completed at least once — success or failure (e.g. file not found yet
-  // on a fresh install) both count. Gates notifications on refresh() so a
-  // cold-start race can't read "not loaded yet" as "no prior failures" and
-  // over-notify. We track this ourselves rather than relying on `loaded`
-  // never regressing after we write the file, since that behavior isn't
-  // guaranteed by FileView's public API.
+  // Tracks whether the initial previous-state read attempt has completed at
+  // least once — success, "missing", or any other failure all count. Gates
+  // notifications on refresh() so a cold-start race can't read "not loaded
+  // yet" as "no prior failures" and over-notify.
   property bool _stateReady: false
 
   function _previousFailedIds() {
-    if (!stateFile.loaded) return []
-    try {
-      var text = stateFile.text()
-      if (_byteLength(text) > root._maxConfigBytes) return []
-      var data = JSON.parse(text)
-      return Array.isArray(data.failedIds) ? data.failedIds : []
-    } catch (e) {
-      return []
-    }
+    return root.readBoundedFile(root._statePath, root._maxConfigBytes).then(function(text) {
+      root._stateReady = true
+      if (text === null) return []
+      try {
+        var data = JSON.parse(text)
+        return Array.isArray(data.failedIds) ? data.failedIds : []
+      } catch (e) {
+        return []
+      }
+    })
   }
 
   // ── Fetch ─────────────────────────────────────────────────────────────────
@@ -358,29 +381,30 @@ Item {
         })
       })
 
-      // Only compare/notify once the previous-state file has actually
-      // finished loading (or failed to, e.g. missing on a fresh install),
-      // so a cold-start race can't misread "no prior state yet" as
-      // "everything is new" and over-notify.
-      if (notifyOnFailure && root._stateReady) {
-        root._notifyNewFailures(results)
-      }
+      // Always read previous state (to advance _stateReady for next time),
+      // but only actually fire notifications once we know this isn't the
+      // very first read — otherwise a cold-start race could misread "no
+      // prior state yet" as "everything is new" and over-notify.
+      var wasStateReady = root._stateReady
+      root._previousFailedIds().then(function(prevIds) {
+        var notifyPromise = (notifyOnFailure && wasStateReady)
+          ? root._notifyWithPrevIds(results, prevIds)
+          : Promise.resolve()
 
-      root.instances = results
-      root.totalActive = totalActive
-      root.totalRunning = totalRunning
-      root.totalFailed = totalFailed
-      root.state = "ready"
-      root.message = ""
-      root.fetchedAt = new Date().toISOString()
-      root.loading = false
-      root._fetchInFlight = false
+        return notifyPromise
+      }).then(function() {
+        root.instances = results
+        root.totalActive = totalActive
+        root.totalRunning = totalRunning
+        root.totalFailed = totalFailed
+        root.state = "ready"
+        root.message = ""
+        root.fetchedAt = new Date().toISOString()
+        root.loading = false
+        root._fetchInFlight = false
 
-      stateFile.setText(JSON.stringify({ failedIds: failedIds }))
-      // setText() updates FileView's in-memory text synchronously, but
-      // reload() keeps `loaded`/error state consistent with what's now on
-      // disk for the next refresh's _previousFailedIds() read.
-      stateFile.reload()
+        stateFile.setText(JSON.stringify({ failedIds: failedIds }))
+      })
     }).catch(function() {
       root.state = "error"
       root.message = "n8n fetch failed."
@@ -457,9 +481,9 @@ Item {
 
   // ── Failure notifications ────────────────────────────────────────────────
 
-  function _notifyNewFailures(results) {
+  function _notifyWithPrevIds(results, prevIds) {
     var prevSet = {}
-    root._previousFailedIds().forEach(function(k) { prevSet[k] = true })
+    prevIds.forEach(function(k) { prevSet[k] = true })
 
     var fired = 0
     for (var i = 0; i < results.length && fired < root._maxNotificationsPerRun; i++) {
@@ -547,15 +571,16 @@ Item {
 
   visible: false
 
+  Component.onCompleted: root._loadInstances()
+
   Timer {
-    // The first refresh is triggered by instancesFile.onLoaded, which
-    // fires shortly after startup once the config file's initial async
-    // load completes — no need to also fire on this timer's first tick.
+    // Initial load is triggered by Component.onCompleted above; this timer
+    // only handles the recurring poll.
     interval: root.intSetting("refreshIntervalSec", 30, 10, 300) * 1000
     repeat: true
     running: true
     triggeredOnStart: false
-    onTriggered: root.refresh()
+    onTriggered: root._loadInstances()
   }
 
   // Refresh after a toggle so the UI reflects the new state quickly
